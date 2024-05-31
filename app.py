@@ -6,6 +6,7 @@ from datetime import datetime, timedelta
 from dotenv import load_dotenv
 import os
 import ast
+import matplotlib.pyplot as plt
 load_dotenv()
 
 google_credentials = os.getenv('GOOGLE_CREDENTIALS')
@@ -22,12 +23,65 @@ def send_message_tel(message):
     }
     res = requests.post(url, params=params)
 
+# Функция для отправки изображения в Телеграм
+def send_image_to_telegram(file_path):
+    url = f'https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendPhoto'
+    with open(file_path, 'rb') as file:
+        files = {'photo': file}
+        data = {'chat_id': TELEGRAM_CHANNEL_ID, 'caption': 'Changing the number of products in categories'}
+        response = requests.post(url, files=files, data=data)
+    return response
+
+# создадим функцию по построению графика по полученной таблице и отправке ее в телеграм
+def send_plot(new_df, shop_name = 'Name'):
+    plot_df = new_df.copy()
+    # Устанавливаем 'Category' как индекс
+    plot_df.set_index('Category', inplace=True)
+
+    # Транспонируем DataFrame для удобства построения графика
+    df_t = plot_df.T
+
+    # Построение графика
+    plt.figure(figsize=(14, 8))
+
+    for category in df_t.columns:
+        plt.plot(df_t.index, df_t[category], marker='o', label=category)
+
+    plt.xlabel('Date')
+    plt.ylabel('Count')
+    plt.title(f'{shop_name} Changing the number of products in a category')
+    plt.legend(loc='center left', bbox_to_anchor=(1.0, 0.5))
+    plt.grid(True)
+    plt.xticks(rotation=45)
+    plt.tight_layout()
+
+    # Сохраняем график в файл
+    file_path = 'category_changes.png'
+    plt.savefig(file_path)
+    plt.close()
+
+    # Отправляем изображение в Телеграм
+    response = send_image_to_telegram(file_path)
+    if response.status_code != 200:
+        send_message_tel(f'Ошибка при отправке изображения в Телеграм: {response.text}')
+
 
 # подключаемся к гугл шит
 credentials = ast.literal_eval(google_credentials)
 gc = gspread.service_account_from_dict(credentials)
 sh = gc.open('azadea_products_today')
 
+# напишем функцию получения дней в виде строки
+def get_date_minus_today(days):
+    return (datetime.today() - timedelta(days=days)).strftime('%Y-%m-%d')
+
+# Список для хранения дат
+dates = [get_date_minus_today(i) for i in range(7)]
+
+# Разделяем список на отдельные переменные
+today, yesterday, minus_two_days, minus_three_days, minus_four_days, minus_five_days, minus_six_days = dates
+# заранее сохраним список необходимых колонок
+df_columns = ['Category', minus_six_days, minus_five_days, minus_four_days, minus_three_days, minus_two_days, yesterday]
 
 def get_azadea_data():
     # категории, которые будем проверять
@@ -84,11 +138,12 @@ def get_azadea_data():
     wks = sh.sheet1
     # сохраняем его в датафрейм
     old_df = pd.DataFrame(wks.get_all_records())
-    # выбираем только категории и данные за вчера
-    old_df = old_df[['Category', yesterday]]
 
+
+    # выбираем только категории и данные за вчера
+    old_df_v_two = old_df[df_columns].copy()
     # соединяем данные за вчера и сегодня
-    new_df = pd.merge(df, old_df, how='left', on='Category')
+    new_df = pd.merge(old_df_v_two, df, how='left', on='Category')
 
     # приводим значения к цифрам
     new_df[yesterday] = new_df[yesterday].fillna(0).astype('int')
@@ -97,9 +152,16 @@ def get_azadea_data():
     # проверяем, были ли изменения
     chech_df = new_df.copy()
     chech_df['delta'] = chech_df[yesterday] - chech_df[today]
+    # сохраняем измененные названия категорий и насколько изменились
+    changed_cat = chech_df.query('delta != 0').copy()
+    changed_cat['for_message'] = changed_cat.apply(lambda row: f"{row['Category']} ({row['delta']})", axis=1)
 
     # сохраняем измененные названия категорий
-    changed_cat = chech_df.query('delta != 0')['Category'].unique()
+    changed_cat = changed_cat['for_message'].unique()
+
+    # отправляем график
+    send_plot(new_df, shop_name = 'Azadea')
+
 
     # в зависимости от того, были ли изменения, отправляем сообщения в телеграм канал
     if len(changed_cat) == 0:
@@ -119,6 +181,7 @@ def get_azadea_data():
 
 
 def get_virgin_data():
+
     # категории, которые будем проверять
     virgin_categories = [
         'electronics-accessories/c/n010000',
@@ -134,7 +197,7 @@ def get_virgin_data():
         'gift-cards-vouchers/c/n110000'
     ]
     sh = gc.open('virgin_products_today')
-    
+
     # домен
     virg_domen = 'https://www.virginmegastore.ae/en/'
     data = []
@@ -162,10 +225,7 @@ def get_virgin_data():
         data.append({
             virgin_cat_name:products
         })
-    # сохраняем сегоднешнюю дату
-    today = datetime.today().strftime('%Y-%m-%d')
-    # сохраняем вчерашнюю дату
-    yesterday = (datetime.today() - timedelta(days=1)).strftime('%Y-%m-%d')
+
 
     # делаем общий единый словарь
     merged_data = {k: v for d in data for k, v in d.items()}
@@ -177,11 +237,12 @@ def get_virgin_data():
     wks = sh.sheet1
     # сохраняем его в датафрейм
     old_df = pd.DataFrame(wks.get_all_records())
-    # выбираем только категории и данные за вчера
-    old_df = old_df[['Category', yesterday]]
 
+
+    # выбираем только категории и данные за вчера
+    old_df_v_two = old_df[df_columns].copy()
     # соединяем данные за вчера и сегодня
-    new_df = pd.merge(df, old_df, how='left', on='Category')
+    new_df = pd.merge(old_df_v_two, df, how='left', on='Category')
 
     # приводим значения к цифрам
     new_df[yesterday] = new_df[yesterday].fillna(0).astype('int')
@@ -190,9 +251,16 @@ def get_virgin_data():
     # проверяем, были ли изменения
     chech_df = new_df.copy()
     chech_df['delta'] = chech_df[yesterday] - chech_df[today]
+    # сохраняем измененные названия категорий и насколько изменились
+    changed_cat = chech_df.query('delta != 0').copy()
+    changed_cat['for_message'] = changed_cat.apply(lambda row: f"{row['Category']} ({row['delta']})", axis=1)
 
     # сохраняем измененные названия категорий
-    changed_cat = chech_df.query('delta != 0')['Category'].unique()
+    changed_cat = changed_cat['for_message'].unique()
+
+    # отправляем график
+    send_plot(new_df, shop_name = 'Virginmegastore')
+
 
     # в зависимости от того, были ли изменения, отправляем сообщения в телеграм канал
     if len(changed_cat) == 0:
