@@ -151,7 +151,7 @@ def get_azadea_data():
 
     # проверяем, были ли изменения
     chech_df = new_df.copy()
-    chech_df['delta'] = chech_df[yesterday] - chech_df[today]
+    chech_df['delta'] = chech_df[today] - chech_df[yesterday]
     # сохраняем измененные названия категорий и насколько изменились
     changed_cat = chech_df.query('delta != 0').copy()
     changed_cat['for_message'] = changed_cat.apply(lambda row: f"{row['Category']} ({row['delta']})", axis=1)
@@ -250,7 +250,7 @@ def get_virgin_data():
 
     # проверяем, были ли изменения
     chech_df = new_df.copy()
-    chech_df['delta'] = chech_df[yesterday] - chech_df[today]
+    chech_df['delta'] = chech_df[today] - chech_df[yesterday]
     # сохраняем измененные названия категорий и насколько изменились
     changed_cat = chech_df.query('delta != 0').copy()
     changed_cat['for_message'] = changed_cat.apply(lambda row: f"{row['Category']} ({row['delta']})", axis=1)
